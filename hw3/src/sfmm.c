@@ -1,0 +1,650 @@
+/**
+ * All functions you make for the assignment must be implemented in this file.
+ * Do not submit your assignment with a main function in this file.
+ * If you submit with a main function in this file, you will get a zero.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+#include "sfmm.h"
+
+
+/**
+ * You should store the head of your free list in this variable.
+ * Doing so will make it accessible via the extern statement in sfmm.h
+ * which will allow you to pass the address to sf_snapshot in a different file.
+ */
+sf_free_header* freelist_head = NULL;
+
+
+
+#define PAGE_SIZE 4096
+
+
+
+
+
+
+void* sf_malloc(size_t size) {
+  char* payload_address;
+  size_t payload_size;
+  char* header_address;
+  char* footer_address;
+  char* freelist_address;
+  size_t blocksize;
+  //size_t extendsize;
+  if(size==0){
+    errno = EINVAL;
+    return NULL;
+  }
+  if(size>4294967296){
+    errno = ENOMEM;
+    return NULL;
+  }
+  /*if the freelist_head is NULL, means we need to request a new space for heap*/
+  if(freelist_head == NULL){
+     header_address = sf_sbrk(PAGE_SIZE);
+    if(header_address == (void *)-1){
+      errno = EINVAL;/* Invalid argument */	/* Invalid argument */
+      return NULL;
+    }
+
+  /*align the header_address make it can be divisble by 8*/
+  //printf("before header_address %p\n",header_address);
+  if((uint64_t)header_address%16==0){
+    header_address =  header_address+8;
+  }else if ((uint64_t)header_address%16==8){
+    header_address = header_address;
+  }
+  //printf("header_address %p\n",header_address);
+
+  /*get the number of rows the payload actually need*/
+  payload_size = (size-1)/8+1;
+  payload_size = payload_size*8;
+
+// printf("payload_size %zu\n",payload_size);
+ /*obtian the footer_address by add header_address and payload_size and the size of header*/
+ footer_address= header_address+payload_size+8;
+
+// printf("before footer_address %p\n",footer_address);
+
+ /*if the footer is not divisble by 16, we add a padding of size 8 bytes*/
+ if((uint64_t)footer_address%16==8){
+   footer_address= footer_address+8;
+ }
+
+//  printf("footer_address %p\n",footer_address);
+  /* get the blocksize by substract header_address from footer_address and add 8 byte for the size of footer itself*/
+  blocksize = (footer_address - header_address)+8;
+
+
+  /* this block of code is to modify the sf_header*/
+  payload_address=header_address+8;
+  sf_header* my_header = (sf_header *)(header_address);
+  my_header -> alloc = 1;
+  my_header -> block_size=blocksize>>4;
+  my_header -> requested_size=size;
+
+  /* this block of code is to modify the sf_footer*/
+  sf_footer* my_footer = (sf_footer *)(footer_address);
+  my_footer -> alloc =1;
+  my_footer -> block_size=blocksize>>4;
+
+  /*once we have our first malloc call, we need to make the rest of the requested heap space as the free list*/
+  freelist_address = footer_address+8;
+//  printf("freeelist_adress %p\n",freelist_address);
+
+  /* linked the freelist head to our very first heap after we malloced our heap; make the prev and next pointing NULL*/
+  freelist_head =(sf_free_header*)(freelist_address);
+  freelist_head -> header.alloc =0;
+  freelist_head -> next = NULL;
+  freelist_head -> prev = NULL;
+
+  /* get out lastbreakpoint using sbrk(0), modify the freelist header and freelist footer*/
+  char* lastbreakpoint = sf_sbrk(0);
+  char* freelist_footer_address = lastbreakpoint-8;
+  size_t freeblocksize = lastbreakpoint - freelist_address-8;
+//  printf("freeblocksize %zu\n",freeblocksize);
+  freelist_head -> header.block_size=freeblocksize>>4;
+  freelist_head -> header.requested_size = 0;
+
+  sf_footer* myfreefooter = (sf_footer *)(freelist_footer_address-8);
+  myfreefooter -> alloc =0;
+  myfreefooter -> block_size=freeblocksize>>4;
+
+
+
+
+
+  //printf("sizeof %zu\n",sizeof(sf_sbrk(0)));
+  //printf("sizeof %zu\n",sizeof(uint64_t));
+  /*return the payload address, the first implementation of malloc has been complete.*/
+  return payload_address;
+}else{
+  /* in this block we are going to impletement the case we have a freeblocksize*/
+
+
+sf_free_header* cursor = freelist_head;
+sf_free_header* cursortemp = NULL;
+//int continueloop = 0;
+
+//bool successful =false;
+
+while(cursor!=NULL ){
+
+
+
+//  cursor = freelist_head;
+
+
+  //sf_free_header* Next = cursor->next;
+  //sf_free_header* Prev = cursor->prev;
+
+
+
+
+  /* we create a cursor of sf_free_header struct and made it pointing to the head of the free_list*/
+  //sf_free_header* cursor = freelist_head;
+//  printf("enter a search of successful fit freelist");
+
+  size_t freesize = cursor -> header.block_size<<4;
+  sf_free_header* Prev = cursor -> prev;
+  //printf("PREV %p\n",Prev);
+
+
+  sf_free_header* Next = cursor -> next;
+
+//printf("Next %p\n",Next);
+
+//printf("freelist_head  %p\n",freelist_head);
+
+//  printf("header.block_sizeheader.block_size %d\n", cursor -> header.block_size<<4);
+  //printf("free_list sizeeee %zu\n",freesize);
+  /* i this block we find the free_list which is larger than our requested size*/
+  if(freesize>size){
+    /* we get the address of the header of the fit freelist*/
+    sf_header* free_list_header_address = &(cursor -> header);
+  //  printf("the address of fit freelist %p \n",free_list_header_address);
+
+    /*set payload address, this time we dont need to align*/
+    payload_address=(char*)free_list_header_address+8;
+    payload_size = (size-1)/8+1;
+    payload_size = payload_size*8;
+
+    //printf("payload_size %zu\n",payload_size);
+    /*get footer address*/
+    footer_address=(char*) free_list_header_address+payload_size+8;
+    /*check if the footer address divisble by 16, if not increment address by 8 bytes*/
+    if((uint64_t)footer_address%16==8){
+      footer_address= footer_address+8;
+    }
+
+     //printf("footer_address %p\n",footer_address);
+     /* get the blocksize by substract header_address from footer_address and add 8 byte for the size of footer itself*/
+     blocksize = (footer_address - (char*)free_list_header_address)+8;
+
+
+
+     /* modyfy the header and footer*/
+    sf_header* my_header = (sf_header *)(free_list_header_address);
+    my_header -> alloc = 1;
+    my_header -> block_size=blocksize>>4;
+    my_header -> requested_size=size;
+    //printf("header_address %p \n",free_list_header_address);
+  //  printf("footeraddddddresss %p\n",footer_address);
+
+    sf_footer* my_footer = (sf_footer*)(footer_address);
+    my_footer -> alloc =1;
+    my_footer -> block_size=blocksize>>4;
+
+    size_t newfreeblocksize = freesize-blocksize;
+
+    //printf("the block size of allocaed first %zu \n",blocksize);
+    //printf("the new free size of allocaed %zu \n",newfreeblocksize);
+
+/*
+    printf("my_footer  address %p\n",footer_address);
+
+    char* freeheaderaddress = footer_address + 8;
+    printf("freeheaderaddress %p\n",freeheaderaddress);
+    freelist_head = (sf_free_header*)(freeheaderaddress);
+    sf_header* myfreeheader = (sf_header*)(freeheaderaddress);
+    myfreeheader-> alloc =0;
+
+    char* lastbreakpoint = sf_sbrk(0);
+    char* freelist_footer_address = lastbreakpoint-8;
+    size_t freeblocksize = lastbreakpoint - (char*)freelist_footer_address;
+
+    freelist_head -> header.alloc =0;
+    freelist_head -> header.block_size=freeblocksize>>4;
+    freelist_head -> header.requested_size =0;
+    //char* lastbreakpoint = sf_sbrk(0);
+
+*/
+
+
+
+    if(newfreeblocksize!=0){
+    freelist_address = footer_address+8;
+    //printf("freeelist_adress  second %p\n",freelist_address);
+
+
+
+  //  linked the freelist head to our very first heap after we malloced our heap; make the prev and next pointing NULL
+    cursor =(sf_free_header*)(freelist_address);
+    cursor->header.alloc =0;
+    void* lastbreakpoint = sf_sbrk(0);
+
+    //void* freelist_footer_address = (void*)lastbreakpoint-8;
+    size_t freeblocksize = lastbreakpoint - (void*)freelist_address-8;
+
+    //printf("freeblocksize second %zu\n",freeblocksize);
+
+    cursor -> header.block_size = (freeblocksize>>4);
+    cursor -> header.requested_size = 0;
+
+    cursor -> next = Next;
+    cursor -> prev = Prev;
+
+    if( Prev == NULL){
+      freelist_head=cursor;
+    }
+
+
+    char* testfooteraddress = (char*)freelist_address+newfreeblocksize-8;
+
+    sf_footer* myfreefooter = (sf_footer*)( testfooteraddress);//(sf_footer*) (freelist_footer_address);
+
+
+
+
+
+    //printf("my free footer address %p",myfreefooter);
+
+    //printf("my free footer address2 %p",testfooteraddress);
+    myfreefooter-> alloc =0;
+    myfreefooter-> block_size =(uint64_t)(freeblocksize>>4);
+    //continueloop = 1;
+  }else{
+    freelist_head =  freelist_head -> next;
+  }
+
+    return payload_address;
+
+
+  }else if(freesize<=size){
+/* in this case we have to handle the current freelist is not big enough to handle the required_size*/
+  if(cursor != NULL){
+    cursortemp=cursor;
+    //printf("enter this 999999999\n");
+  cursor = cursor->next;
+  //printf("cursoraddress %p",cursor);
+  //cursor = freelist_head;
+}else{
+  //printf("else\n");
+  cursortemp=cursor;
+  cursor = NULL;
+}
+//
+//  printf("enter this 12312\n");
+
+//  printf("my free header address %p\n",freelist_head);
+
+
+
+
+
+
+  }
+
+
+
+
+
+
+
+
+
+
+
+
+
+}//<-----endwhile
+
+
+cursor =cursortemp;
+//printf("cursoraddress111111111 %p",cursor);
+/* if the program execution reach this point. it means we didn't find the fit space*/
+size_t newblocksize=0;
+
+do{
+char* extendedaddress =  sf_sbrk(PAGE_SIZE);
+printf("get extendedaddress %p\n", extendedaddress);
+//printf("get freelist_head %p\n", cursor);
+
+size_t originalsize = cursor -> header.block_size;
+originalsize = originalsize<<4;
+//printf("get freelist_head %zu\n", originalsize);
+//char* originalfooteraddress = (char*)cursor + originalsize -8;
+
+
+//printf("get originalfooteraddress %p\n", originalfooteraddress);
+newblocksize = originalsize + 4096;
+//printf("get newblocksize %zu\n", newblocksize);
+cursor -> header.block_size = newblocksize>>4;
+cursor -> header.alloc = 0;
+cursor -> header.requested_size=0;
+
+
+//sf_footer* myfooter = (sf_footer*) (originalfooteraddress+4096);
+//printf("get myfooter %p\n", myfooter);
+//myfooter -> alloc =0;
+//myfooter -> block_size=newblocksize>>4;
+}while((cursor->header.block_size<<4)<size );
+
+//printf("new fit size %zu\n",newblocksize);
+//originalfooteraddress=originalfooteraddress+PAGE_SIZE;
+//printf("get myfooter %p\n", originalfooteraddress+4096);
+
+//return sf_malloc(size);
+
+char* extend_header_address = (char*)cursor;
+//printf("the address of fit freelist %p \n",extend_header_address);
+
+/*
+cursor->header.alloc=0;
+cursor->header.block_size=newblocksize;
+cursor->header.requested_size=0;
+*/
+
+payload_address=(char*)extend_header_address+8;
+payload_size = (size-1)/8+1;
+payload_size = payload_size*8;
+
+//printf("payload_size %zu\n",payload_size);
+/*get footer address*/
+footer_address=(char*) extend_header_address+payload_size+8;
+/*check if the footer address divisble by 16, if not increment address by 8 bytes*/
+if((uint64_t)footer_address%16==8){
+  footer_address= footer_address+8;
+}
+
+ //printf("footer_address %p\n",footer_address);
+ /* get the blocksize by substract header_address from footer_address and add 8 byte for the size of footer itself*/
+ blocksize = (footer_address - (char*)extend_header_address)+8;
+
+
+ //printf("blobl size %zu",blocksize);
+
+
+
+ /* modyfy the header and footer*/
+sf_header* my_header = (sf_header *)(extend_header_address);
+my_header -> alloc = 1;
+my_header -> block_size=blocksize>>4;
+my_header -> requested_size=size;
+
+sf_footer* my_footer = (sf_footer *)(footer_address);
+my_footer -> alloc =1;
+my_footer -> block_size=blocksize>>4;
+
+size_t newfreeblocksize = newblocksize-blocksize;
+
+//printf("the block size of allocaed %zu \n",blocksize);
+//printf("the new free size of allocaed %zu \n",newfreeblocksize);
+
+
+
+
+
+freelist_address = footer_address+8;
+//printf("freeelist_adress  second %p\n",freelist_address);
+
+//cursor = freelist_head;
+
+//  linked the freelist head to our very first heap after we malloced our heap; make the prev and next pointing NULL
+//sf_free_header* tempnext = cursor->next;
+//sf_free_header* tempprev = cursor->prev;
+
+sf_free_header* newfreeheader =(sf_free_header*)(freelist_address);
+newfreeheader->header.alloc =0;
+void* lastbreakpoint = sf_sbrk(0);
+
+//void* freelist_footer_address = (void*)lastbreakpoint-8;
+size_t freeblocksize = lastbreakpoint - (void*)freelist_address-8;
+
+//printf("newfreeheader 123 %p\n",newfreeheader);
+//printf("freeblocksize second %zu\n",freeblocksize);
+//printf("freeblocksize second %zu\n",newfreeblocksize);
+
+
+
+newfreeheader -> header.block_size = (newfreeblocksize>>4);
+newfreeheader -> header.requested_size = 0;
+
+//newfreeheader -> next = NULL;
+newfreeheader -> prev = cursor-> prev;
+//printf("newfreeheader > prev %p\n",newfreeheader -> prev);
+//printf("cursorewferfg %p",cursor);
+cursor -> next = newfreeheader;
+//printf("cursor next %p\n",cursor -> next);
+cursor = newfreeheader;
+newfreeheader ->prev->next =cursor;
+//printf("newcursor 123 %p\n",cursor);
+//printf("freelistheader 123 %p\n",freelist_head);
+//printf("freelistheader next %p\n",freelist_head->next);
+char* testfooteraddress = (char*)freelist_address+newfreeblocksize-8;
+
+sf_footer* myfreefooter = (sf_footer*)( testfooteraddress);//(sf_footer*) (freelist_footer_address);
+
+
+
+
+
+//printf("my free footer address %p",myfreefooter);
+
+//printf("my free footer address2 %p",testfooteraddress);
+myfreefooter-> alloc =0;
+myfreefooter-> block_size =(uint64_t)(freeblocksize>>4);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+return payload_address;
+
+
+
+
+
+}
+
+
+  return NULL;
+}
+
+void sf_free(void *ptr) {
+  sf_header* header_address_to_free = (sf_header*)((char*)(ptr-8));
+  //printf("the header of the block we want to free %p \n",header_address_to_free);
+  //sf_free_header* nextfree = (sf_free_header*)(ptr);
+  //freelist_head -> prev = nextfree;
+  //nextfree = freelist_head;
+
+  //freelist_head = nextfree;
+  //sf_free_header* prevfree = NULL;
+  //freelist_head -> next = prevfree;
+  //prevfree =NULL;
+
+  //printf("the content in the header %x",*header_address_to_free);
+  //int isalloc =(int) header_address_to_free->alloc;
+  size_t blocksize = (size_t) header_address_to_free->block_size<<4;
+
+
+  //printf("check if it's allock %d \n",isalloc);
+  //printf("check the block size %zu \n",blocksize);
+  //printf("nextfree % \n",blocksize);
+
+  sf_free_header* myfreeheader = (sf_free_header*)header_address_to_free;
+  myfreeheader -> header.alloc = 0;
+  myfreeheader -> header.block_size = blocksize>>4;
+  myfreeheader -> header.requested_size = 0;
+  myfreeheader ->prev =NULL;
+
+  //printf("freelistheadaddress %p \n",myfreeheader);
+
+  myfreeheader ->next = freelist_head;
+
+//printf("freelist_head->nextqweqweqwe %p \n",myfreeheader ->next);
+
+  freelist_head -> prev = myfreeheader;
+
+  freelist_head = myfreeheader;
+  //printf("check the block size12 %zu \n",blocksize);
+  //printf("myfreeheader allock %d \n",(int)myfreeheader -> header.alloc);
+  //printf("myfreeheader block size %zu \n",(size_t)myfreeheader -> header.block_size);
+
+
+  //printf("check the block size13 %zu \n",blocksize);
+  char* freefooteraddress = (char*) header_address_to_free + blocksize-8 ;
+  //printf("my freefooteraddress%p \n",freefooteraddress);
+  sf_footer* myfooter = (sf_footer*)freefooteraddress;
+  myfooter -> alloc = 0;
+  myfooter -> block_size=blocksize>>4;
+
+  //printf("myfooter block size %zu \n",(size_t)myfooter -> block_size);
+
+
+  //freelist_head = myfreeheader;
+  /* the next block of code is used to coalesing free list*/
+
+  char* nextBlockheader =(char*) myfooter+8;
+  sf_header* nextheader = (sf_header*)nextBlockheader;
+  if(nextheader->alloc==0){
+    //printf("\n");
+    //printf("\n");
+  //  printf("\n");
+  //  printf("\n");
+  ///  printf("\n");
+  ///  printf("\n");
+  //  printf("next is a freelist\n");
+    size_t nextblocksize = nextheader->block_size<<4;
+    size_t firstblocksize = blocksize;
+    //printf("firstblocksize %zu\n",firstblocksize);
+    //printf("nextblocksize %zu\n",nextblocksize);
+    //myfooter = NULL;
+    //nextheader=NULL;
+    size_t sumofblocksize = nextblocksize+firstblocksize;
+    freelist_head -> header.block_size=sumofblocksize>>4;
+    freelist_head -> header.alloc = 0;
+    freelist_head -> header.requested_size=0;
+
+    //printf("freelsitr_head address %p\n",freelist_head);
+    //printf("sumofblocksize %zu\n",sumofblocksize);
+
+
+
+
+    sf_footer* newfooter = (sf_footer*) (((char*)freelist_head) + sumofblocksize-8);
+  //  printf("newfooter address %p\n",newfooter);
+
+    newfooter-> alloc=0;
+    newfooter-> block_size=sumofblocksize>>4;
+
+    //printf("freelist_head %p",freelist_head);
+    //printf("freelist_head %p",freelist_head->next);
+//printf("freelist_head %p",freelist_head->next->next);
+    freelist_head->next->next = ((freelist_head ->next) -> next->next);
+
+
+  }else if(nextheader->alloc==1){
+  //  printf("next is a alloced block");
+  }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+}
+
+void* sf_realloc(void *ptr, size_t size) {
+    return NULL;
+}
+
+void* sf_calloc(size_t nmemb, size_t size) {
+  char* result;
+ int i=0;
+ for(i=0;i<nmemb;i++){
+   if(i==0){
+     result = sf_malloc(size);
+   }else{
+   sf_malloc(size);
+ }
+ if(result==NULL){
+   errno = EINVAL;
+ }
+ return result;
+ }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    return NULL;
+}
